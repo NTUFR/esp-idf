@@ -36,6 +36,7 @@ typedef struct {
         uint32_t enable_listen_only: 1;     /**< No transmissions or acknowledgements. The controller only monitors the bus without participating */
         uint32_t no_receive_rtr: 1;         /**< Don't receive remote frames */
         uint32_t sleep_allow_pd: 1;         /**< Allow power down during sleep to save power, driver will backup/restore the TWAI registers to guarantee the peripheral features. */
+        uint32_t no_recover_auto_tx: 1;     /**< No automatic resume remain TX when node recovered from bus off */
         uint32_t enable_scheduled_tx: 1;    /**< Schedule TX mode, if enabled, the tx frame will actually send until `twai_frame_t::header.trigger_time` is reached,
                                                  Feature depends on hardware support, and `timestamp_resolution_hz` must be set. */
     } flags;                                /**< Misc configuration flags */

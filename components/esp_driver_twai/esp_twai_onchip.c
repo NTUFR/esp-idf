@@ -53,6 +53,7 @@ typedef struct {
     uint32_t src_freq_hz;
     uint32_t timestamp_freq_hz;
     uint32_t valid_fd_timing;
+    bool no_recover_auto_tx;
     bool enable_scheduled_tx;
     twai_event_callbacks_t cbs;
     void *user_data;
@@ -211,6 +212,25 @@ static inline bool _node_is_tx_all_done(twai_onchip_ctx_t *node)
     return true;
 }
 
+static void _node_discard_remain_tx_from_isr(twai_onchip_ctx_t *node, BaseType_t *yield_required)
+{    
+    if (node->cbs.on_tx_done) {
+        twai_tx_done_event_data_t tx_ev = {
+            .is_tx_success = false,
+        };
+        for (uint8_t tx_idx = 0; tx_idx < node->tx_slot_num; tx_idx++) {
+            if (node->p_curr_tx[tx_idx]) {
+                tx_ev.done_tx_frame = node->p_curr_tx[tx_idx];
+                *yield_required |= node->cbs.on_tx_done(&node->api_base, &tx_ev, node->user_data);
+                node->p_curr_tx[tx_idx] = NULL;
+            }
+        }
+        while (ESP_OK == twai_frame_queue_pop_from_isr(node->tx_queue, &tx_ev.done_tx_frame, (bool *)yield_required)) {
+            *yield_required |= node->cbs.on_tx_done(&node->api_base, &tx_ev, node->user_data);
+        }
+    }
+}
+
 static void _node_isr_main(void *arg)
 {
     BaseType_t do_yield = pdFALSE;
@@ -255,7 +275,7 @@ static void _node_isr_main(void *arg)
             do_yield |= twai_ctx->cbs.on_state_change(&twai_ctx->api_base, &e_data, twai_ctx->user_data);
         }
         // node recover from busoff, restart remain tx transaction
-        if ((e_data.old_sta == TWAI_ERROR_BUS_OFF) && (e_data.new_sta == TWAI_ERROR_ACTIVE)) {
+        if ((e_data.old_sta == TWAI_ERROR_BUS_OFF) && (e_data.new_sta == TWAI_ERROR_ACTIVE) && !twai_ctx->no_recover_auto_tx) {
             if (_node_start_tx_batch_from_isr(twai_ctx, &do_yield)) {
                 atomic_store(&twai_ctx->hw_busy, true);
             } else {
@@ -308,8 +328,12 @@ static void _node_isr_main(void *arg)
             tx_done_events &= ~slot_event;
         }
 
-        // start a new TX batch only when all hardware TX buffers from this batch are done
-        if (_node_is_tx_all_done(twai_ctx) && (atomic_load(&twai_ctx->state) != TWAI_ERROR_BUS_OFF)) {
+        if ((events & TWAI_HAL_EVENT_BUS_OFF) && twai_ctx->no_recover_auto_tx) {
+            _node_discard_remain_tx_from_isr(twai_ctx, &do_yield);
+            _node_mark_tx_idle(twai_ctx);
+            xEventGroupSetBitsFromISR(twai_ctx->event_group, TWAI_IDLE_EVENT_BIT, &do_yield);
+        } else if (_node_is_tx_all_done(twai_ctx) && (atomic_load(&twai_ctx->state) != TWAI_ERROR_BUS_OFF)) {
+            // start a new TX batch only when all hardware TX buffers from this batch are done
             if (!_node_start_tx_batch_from_isr(twai_ctx, &do_yield)) {
                 _node_mark_tx_idle(twai_ctx);
                 xEventGroupSetBitsFromISR(twai_ctx->event_group, TWAI_IDLE_EVENT_BIT, &do_yield);
@@ -695,6 +719,7 @@ esp_err_t twai_new_node_onchip(const twai_onchip_node_config_t *node_config, twa
     node->ctrlr_id = ctrlr_id;
     node->hal = (twai_hal_context_t *)(node + 1);   //hal context is place at end of driver context
     node->curr_clk_src = node_config->clk_src ? node_config->clk_src : TWAI_CLK_SRC_DEFAULT;
+    node->no_recover_auto_tx = node_config->flags.no_recover_auto_tx;
     node->enable_scheduled_tx = node_config->flags.enable_scheduled_tx;
     ESP_GOTO_ON_ERROR(esp_clk_tree_src_get_freq_hz(node->curr_clk_src, ESP_CLK_TREE_SRC_FREQ_PRECISION_APPROX, &node->src_freq_hz), err, TAG, "get clock source frequency failed");
 

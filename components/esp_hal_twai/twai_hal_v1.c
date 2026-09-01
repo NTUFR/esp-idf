@@ -208,8 +208,7 @@ static inline uint32_t twai_hal_decode_interrupt(twai_hal_context_t *hal_ctx)
                 //The last error which trigger bus_off, hardware no longer fire TWAI_HAL_EVENT_BUS_ERR, but error reason still need to be read/clear and report
                 TWAI_HAL_SET_BITS(events, TWAI_HAL_EVENT_BUS_OFF | TWAI_HAL_EVENT_BUS_ERR);
                 TWAI_HAL_SET_BITS(state_flags, TWAI_HAL_STATE_FLAG_BUS_OFF);
-                //Any TX would have been halted by entering bus off. Reset its flag
-                TWAI_HAL_CLEAR_BITS(state_flags, TWAI_HAL_STATE_FLAG_RUNNING | TWAI_HAL_STATE_FLAG_TX_BUFF_OCCUPIED);
+                TWAI_HAL_CLEAR_BITS(state_flags, TWAI_HAL_STATE_FLAG_RUNNING);
             } else {
                 //Below EWL. Therefore TEC is counting down in bus recovery
                 TWAI_HAL_SET_BITS(events, TWAI_HAL_EVENT_BUS_RECOV_PROGRESS);
@@ -232,12 +231,13 @@ static inline uint32_t twai_hal_decode_interrupt(twai_hal_context_t *hal_ctx)
     if (interrupts & TWAI_LL_INTR_RI) {
         TWAI_HAL_SET_BITS(events, TWAI_HAL_EVENT_RX_BUFF_FRAME);
     }
-    //Transmit interrupt set whenever TX buffer becomes free
+    //Transmit interrupt set whenever TX buffer becomes free or tx failed leads to bus off
 #if TWAI_LL_HAS_INTR_LOST_ISSUE
     // Errata workaround: Check the transmit buffer status bit to recover any lost transmit interrupt.
-    if ((interrupts & TWAI_LL_INTR_TI || hal_ctx->state_flags & TWAI_HAL_STATE_FLAG_TX_BUFF_OCCUPIED) && status & TWAI_LL_STATUS_TBS) {
+    if (((interrupts & TWAI_LL_INTR_TI || hal_ctx->state_flags & TWAI_HAL_STATE_FLAG_TX_BUFF_OCCUPIED) && status & TWAI_LL_STATUS_TBS) \
+        || (state_flags & TWAI_HAL_STATE_FLAG_BUS_OFF)) {
 #else
-    if (interrupts & TWAI_LL_INTR_TI) {
+    if (interrupts & TWAI_LL_INTR_TI || state_flags & TWAI_HAL_STATE_FLAG_BUS_OFF) {
 #endif
         TWAI_HAL_SET_BITS(events, TWAI_HAL_EVENT_TX0_DONE);
         TWAI_HAL_CLEAR_BITS(state_flags, TWAI_HAL_STATE_FLAG_TX_BUFF_OCCUPIED);
